@@ -161,9 +161,8 @@ function createSSMAutomationDocumentApprovalBeforePatching(instanceIds, accountI
             'RoleARN': [roleARN],
             'Workload': [workloadName],
             'NotificationArn': [`arn:aws:sns:eu-west-1:${accountId}:Automation-ApprovalRequest`],
-            'AutomationAssumeRole': ['arn:aws:iam::861664031906:role/AWS-SystemsManager-AutomationAdministrationRole'],
-            'Approvers':['arn:aws:sts::861664031906:assumed-role/SSM-CrossAccountApproverAccess/Zainab',
-                'arn:aws:iam::861664031906:user/zainab'],
+            'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole'],
+            'Approvers':['arn:aws:iam::<ParentAccountId>:user/approver'],
             'Message':[`Please approve patching for workload ${workloadName} that has the following EC2 instances ${instanceIds} `]
         }
     };
@@ -175,7 +174,7 @@ function createSSMAutomationDocumentCreateAmiParamsObject(instanceIds, accountId
         Parameters: {
             'Workload': [workloadName],
             'RoleARN': [roleARN],
-            'AutomationAssumeRole': ['arn:aws:iam::861664031906:role/AWS-SystemsManager-AutomationAdministrationRole']
+            'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole']
         },
         TargetLocations: [{
             Accounts: [accountId],
@@ -277,9 +276,8 @@ function createSSMAutomationDocumentParamsObject(workloadItem){
             'Workload': [`${workloadItem.workload}`],
             'NotificationArn': [`arn:aws:sns:eu-west-1:${workloadItem.account}:Automation-ApprovalRequest`],
             'Mode': ['Manual'],
-            'AutomationAssumeRole': ['arn:aws:iam::861664031906:role/AWS-SystemsManager-AutomationAdministrationRole'],
-            'Approvers':['arn:aws:sts::861664031906:assumed-role/SSM-CrossAccountApproverAccess/Zainab',
-                'arn:aws:iam::861664031906:user/zainab'],
+            'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole'],
+            'Approvers':['arn:aws:iam::<ParentAccountId>:user/approver'],
             'Message':[`Please approve test initialization for workload ${workloadItem.workload} that has the following EC2 instances ${workloadItem.instanceIds} `]
         }
     };
@@ -416,7 +414,7 @@ function createSESParamsObject(owner, data, date, time) {
                 Data: 'Compliance Report from SSM for ' + date + ' at ' + time
             }
         },
-        Source: 'heibam@amazon.com'
+        Source: 'example@123.com'
     };
 }
 

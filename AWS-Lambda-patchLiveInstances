@@ -70,7 +70,7 @@ function createSSMAutomationDocumentObject(instanceIds, roleARN){
         DocumentName: 'Automation-RunScan',
         Parameters: {
             'Operation': ['Install'],
-            'AutomationAssumeRole': ['arn:aws:iam::861664031906:role/AWS-SystemsManager-AutomationAdministrationRole'],
+            'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole'],
         },
         TargetLocations: [{
             Accounts: [getAcountId(roleARN)],

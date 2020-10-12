@@ -11,7 +11,7 @@ exports.handler = async(event) => {
         DocumentName: 'Automation-RunScan',
         Parameters: {
             'Operation': ['Scan'],
-            'AutomationAssumeRole': ['arn:aws:iam::861664031906:role/AWS-SystemsManager-AutomationAdministrationRole']
+            'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole']
         },
         TargetLocations: [{
             Accounts: ouList, // ['ou-e4k3-g2sy60vr', 'ou-e4k3-i998an5p','ou-e4k3-jpejdkd4']
