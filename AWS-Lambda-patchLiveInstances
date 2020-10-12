@@ -1,0 +1,95 @@
+const aws = require('aws-sdk');
+const ssm = new aws.SSM();
+exports.handler = async(event) => {
+    let roleARN = event.ARN;
+    console.log("roleARN", roleARN);
+    let instanceIdsString = event.instanceIds;
+    let instanceIdsArray = instanceIdsString.split(',');
+    console.log("instanceIdsArray", instanceIdsArray);
+
+    try {
+        let ssmAutomation = await ssm.startAutomationExecution(createSSMAutomationDocumentObject(instanceIdsArray, roleARN)).promise();
+        console.log("ssmAutomation", ssmAutomation);
+    }
+    catch (e) {
+        console.error(e);
+    }
+    let sts = new aws.STS({ region: process.env.REGION });
+    let stsParams = {
+        RoleArn: roleARN,
+        RoleSessionName: "awsaccount_session"
+    };
+    const stsResults = await sts.assumeRole(stsParams).promise();
+//    console.log(stsResults);
+    let ec2 = new aws.EC2({
+        region: process.env.REGION,
+        accessKeyId: stsResults.Credentials.AccessKeyId,
+        secretAccessKey: stsResults.Credentials.SecretAccessKey,
+        sessionToken: stsResults.Credentials.SessionToken
+    });
+
+    for(let instanceId of instanceIdsArray){
+        let ec2Params = {
+            Filters: [{
+                Name: "tag:Name",
+                Values: [
+                    `TEST_${event.workload}_ ${instanceId}`
+                ]
+            }]
+        };
+        let amiParams = {
+            Filters: [{
+                Name: "name",
+                Values: [
+                    `TEST_${event.workload}_ ${instanceId}`
+                ]
+            }]
+        };
+        try {
+            let amiResponse = await ec2.describeImages(amiParams).promise();
+            let amiId = amiResponse.Images[0].ImageId;
+            console.log("amiId", amiId);
+            let ec2TagsResponse = await ec2.describeInstances(ec2Params).promise();
+            let testInstanceId = ec2TagsResponse.Reservations[0].Instances[0].InstanceId;
+            console.log("testInstanceId", testInstanceId);
+            let ec2TerminateResponse = await ec2.terminateInstances({InstanceIds: [testInstanceId]}).promise();
+            console.log("ec2TerminateResponse", ec2TerminateResponse);
+            let deregisterAmiReponse = await ec2.deregisterImage({ImageId:amiId}).promise();
+            console.log("deregisterAmiReponse", deregisterAmiReponse);
+        }
+        catch (e) {
+            console.error(e);
+        }
+    }
+
+
+};
+
+function createSSMAutomationDocumentObject(instanceIds, roleARN){
+    return {
+        DocumentName: 'Automation-RunScan',
+        Parameters: {
+            'Operation': ['Install'],
+            'AutomationAssumeRole': ['arn:aws:iam::861664031906:role/AWS-SystemsManager-AutomationAdministrationRole'],
+        },
+        TargetLocations: [{
+            Accounts: [getAcountId(roleARN)],
+            ExecutionRoleName: 'AWS-SystemsManager-AutomationExecutionRole',
+            Regions: ['eu-west-1'],
+            TargetLocationMaxErrors: '100%'
+        },
+
+        ],
+        TargetParameterName: 'InstanceId',
+        Targets: [{
+            Key: 'ParameterValues',
+            Values: instanceIds
+
+        },
+
+        ],
+    };
+}
+function getAcountId(roleARN){
+    return roleARN.substring(roleARN.lastIndexOf("::") + 2, roleARN.lastIndexOf(":role/"));
+}

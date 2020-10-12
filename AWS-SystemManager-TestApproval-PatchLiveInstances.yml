@@ -1,0 +1,41 @@
+description: Automation that patches live instances of a given workload upon user approval
+schemaVersion: '0.3'
+assumeRole: '{{AutomationAssumeRole}}'
+parameters:
+  AutomationAssumeRole:
+    type: String
+    description: (Required) The ARN of the role that allows Automation to perform the actions on your behalf.
+  Approvers:
+    type: StringList
+    description: (Required) The ARN of the role that allows other accounts to approve the workload.
+  Message:
+    type: String
+    description: (Required) The message that will be shown to the approvers.
+  NotificationArn:
+    type: String
+    description: (Required) The ARN of an Amazon SNS topic for Automation approvals.
+  InstanceIds:
+    type: String
+    description: (Required) Instance ids of the workload
+  RoleARN:
+    type: String
+    description: (Required) Role ARN of the account
+  Workload:
+    type: String
+    description: (Required) Name of the workload
+mainSteps:
+  - name: WaitForManualApproval
+    action: 'aws:approve'
+    onFailure: 'step:InvokeLambdaFunction'
+    inputs:
+      Approvers: '{{Approvers}}'
+      Message: '{{Message}}'
+      NotificationArn: '{{NotificationArn}}'
+      MinRequiredApprovals: 1
+    description: Waits for an owner to manually approve
+    nextStep: InvokeLambdaFunction
+  - name: InvokeLambdaFunction
+    action: 'aws:invokeLambdaFunction'
+    inputs:
+      FunctionName: patchLiveInstances
+      Payload: '{"ARN": "{{RoleARN}}", "instanceIds": "{{InstanceIds}}", "workload": "{{Workload}}"}'

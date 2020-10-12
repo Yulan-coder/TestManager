@@ -1,0 +1,83 @@
+description: 'This automation creates an AMI image, then launches an EC2 instance based on that AMI image.'
+schemaVersion: '0.3'
+assumeRole: '{{AutomationAssumeRole}}'
+parameters:
+  InstanceId:
+    type: String
+    description: (Required) The ID of the Amazon EC2 instance.
+  NoReboot:
+    type: Boolean
+    default: false
+    description: (Optional) Do not reboot the instance before creating the image.
+  AutomationAssumeRole:
+    type: String
+    description: '(Optional) The ARN of the role that allows Automation to perform the actions on your behalf. '
+    default: ''
+  Workload:
+    type: String
+    description: '(Required) The workload this instance belongs to. '
+  RoleARN:
+    type: String
+    description: (Required) role ARN of the account
+mainSteps:
+  - name: createImage
+    action: 'aws:createImage'
+    inputs:
+      InstanceId: '{{InstanceId}}'
+      ImageName: 'TEST_{{ Workload }}_ {{ InstanceId }}'
+      NoReboot: false
+  - name: invokeLambda
+    action: 'aws:invokeLambdaFunction'
+    inputs:
+      FunctionName: 'arn:aws:lambda:eu-west-1:861664031906:function:getInstanceTypeAndTags'
+      Payload: '{"instanceId": "{{InstanceId}}", "ARN": "{{RoleARN}}"}'
+  - name: invokeScript
+    action: 'aws:executeScript'
+    outputs:
+      - Name: instanceType
+        Selector: $.Payload.instanceType
+        Type: String
+      - Name: instanceTags
+        Selector: $.Payload.instanceTags
+        Type: MapList
+    inputs:
+      Runtime: python3.6
+      Handler: script_handler
+      InputPayload:
+        payload: '{{ invokeLambda.Payload }}'
+        instanceId: '{{InstanceId}}'
+      Script: |-
+        import json
+        def script_handler(event, context):
+          json_object = json.loads(event['payload'])
+          return {'instanceType': json_object['InstanceType'], 'instanceTags': json_object['Tags']}
+  - name: launchInstance
+    action: 'aws:runInstances'
+    inputs:
+      ImageId: '{{ createImage.ImageId }}'
+      IamInstanceProfileName: SSMInstanceProfile
+      InstanceType: '{{ invokeScript.instanceType }}'
+      TagSpecifications:
+        - ResourceType: instance
+          Tags:
+            - Key: Name
+              Value: 'TEST_{{ Workload }}_ {{ InstanceId }}'
+  - name: createTags
+    action: 'aws:createTags'
+    maxAttempts: 3
+    onFailure: Abort
+    inputs:
+      ResourceType: EC2
+      ResourceIds: '{{ launchInstance.InstanceIds }}'
+      Tags: '{{ invokeScript.instanceTags }}'
+  - maxAttempts: 3
+    inputs:
+      Parameters:
+        Operation: Install
+      InstanceIds:
+        - '{{ launchInstance.InstanceIds }}'
+      DocumentName: AWS-RunPatchBaseline
+    name: runPatchBaseline
+    action: 'aws:runCommand'
+    timeoutSeconds: 800
+    onFailure: Continue
