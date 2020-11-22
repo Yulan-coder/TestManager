@@ -81,3 +81,14 @@ mainSteps:
     action: 'aws:runCommand'
     timeoutSeconds: 800
     onFailure: Continue
+  - name: sleep
+    action: 'aws:sleep'
+    inputs:
+      Duration: PT604799S
+  - name: deleteMyImage
+    action: 'aws:deleteImage'
+    maxAttempts: 3
+    timeoutSeconds: 180
+    onFailure: Abort
+    inputs:
+      ImageId: '{{ createImage.ImageId }}'

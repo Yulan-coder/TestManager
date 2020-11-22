@@ -24,7 +24,6 @@ exports.handler = async(event) => {
                 await updateEC2RecordInDynamodb(instanceId, states.APPROVED_MANUAL_APPROVAL_FOR_TESTING);
             }
 
-            //invoke lambda function to create AMI snapshots
             try {
                 let ssmAutomationResponse = await ssm.startAutomationExecution(createSSMAutomationDocumentCreateAmiParamsObject(instanceIds, event.accountId, event.workload, getRoleArnForAccount(roleARNs,event.accountId))).promise();
                 console.log("ssmAutomationResponse", ssmAutomationResponse);
