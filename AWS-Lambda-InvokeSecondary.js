@@ -89,7 +89,7 @@ exports.handler = async(event) => {
         res.ResourceComplianceSummaryItems[i].awsAccountId = getAcountId(roleARN);
         res.ResourceComplianceSummaryItems[i].operatingSystem = instanceInfo.InstanceInformationList[0].PlatformType;
         res.ResourceComplianceSummaryItems[i].Patches = instancePatchInfo.Patches;
-        let ownerEmailsArray = ec2TagsResponse.Tags.filter(tag => tag.Key === "Owner").map(tag => tag.Value.split(",")).flat().map(ownerEmail => ownerEmail.trim());
+        let ownerEmailsArray = ec2TagsResponse.Tags.filter(tag => tag.Key === "ssmpatching.owner").map(tag => tag.Value.split(",")).flat().map(ownerEmail => ownerEmail.trim());
         ownerEmailsArray = [...new Set(ownerEmailsArray)];
         res.ResourceComplianceSummaryItems[i].ownerEmails = ownerEmailsArray;
     }

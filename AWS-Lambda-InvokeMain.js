@@ -218,7 +218,7 @@ function createWorkloadResourceDictionary(resourceComplianceSummaryItemsArray){
     let workloadResourceDictionary = [];
     for (let resourceComplianceSummaryItem of resourceComplianceSummaryItemsArray) {
 
-        let workload = resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'Workload').Value;
+        let workload = resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'ssmpatching.workload').Value;
         let indexOfWorkload = workloadResourceDictionary.map(workloadResourceDictionaryItem => workloadResourceDictionaryItem.workload).indexOf(workload);
         if (indexOfWorkload === -1) {
             workloadResourceDictionary.push({
@@ -329,7 +329,7 @@ async function addEC2RecordToDynamoDb(resourceComplianceSummaryItem){
                 "instanceId": resourceComplianceSummaryItem.ResourceId,
                 "status": states.COMPLIANCE_STATUS_RETRIEVED,
                 "statusUpdatedAt": getToday().toLocaleString('en-US', { timeZone: "Asia/Bahrain" }),
-                "manualApprovalOrAutomated": resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'Mode').Value,
+                "manualApprovalOrAutomated": resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'ssmpatching.mode').Value,
             }
         }).promise();
         return dbResult;
@@ -361,9 +361,9 @@ function createAccountTable(accountId, resourceComplianceSummaryItemsArray) {
         msg += `<tr><td rowspan=${rowlength}>` + resourceComplianceSummaryItem.ResourceId + "</td>";
         msg += `<td rowspan=${rowlength}>` + resourceComplianceSummaryItem.OverallSeverity + "</td>";
         msg += `<td style='color:red' rowspan=${rowlength}>` + resourceComplianceSummaryItem.Status + "</td>";
-        msg += `<td rowspan=${rowlength}>` + resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'Workload').Value + "</td>";
+        msg += `<td rowspan=${rowlength}>` + resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'ssmpatching.workload').Value + "</td>";
         msg += `<td rowspan=${rowlength}>` + resourceComplianceSummaryItem.operatingSystem + "</td>";
-        msg += `<td rowspan=${rowlength}>` + resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'Mode').Value + "</td>";
+        msg += `<td rowspan=${rowlength}>` + resourceComplianceSummaryItem.Tags.find(tagItem => tagItem.Key === 'ssmpatching.mode').Value + "</td>";
         msg += `<td rowspan=${rowlength}>` + new Date(resourceComplianceSummaryItem.ExecutionSummary.ExecutionTime).toLocaleString('en-GB', { hour12: true}); + "</td>";
         for (let i=0; i<rowlength; i++) {
             if(i>0)
