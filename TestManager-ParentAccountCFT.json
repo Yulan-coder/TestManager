@@ -1,0 +1,763 @@
+{
+  "Parameters": {
+    "ChildAccountId": {
+      "Type": "String",
+      "Description": "AWS Account ID of the child account (the account that AWS Systems Manager Automation will be targeting).",
+      "MaxLength": 12,
+      "MinLength": 12
+    },
+    "KeyPairName": {
+      "Type": "String",
+      "Description": "Name of the key pair that you use to connect to your EC2 instances"
+    }
+  },
+  "Resources": {
+    "ParentAccountRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "AWS-SystemsManager-AutomationAdministrationRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "ssm.amazonaws.com"
+              },
+              "Action": [
+                "sts:AssumeRole"
+              ]
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole",
+          "arn:aws:iam::aws:policy/AWSLambdaFullAccess",
+          "arn:aws:iam::aws:policy/IAMFullAccess"],
+        "Policies": [
+          {
+            "PolicyName": "AssumeRole-AWSSystemsManagerAutomationExecutionRole",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sts:AssumeRole"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::*:role/AWS-SystemsManager-AutomationExecutionRole"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "organizations:ListAccountsForParent"
+                  ],
+                  "Resource": [
+                    "*"
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "AutomationDocumentForScanning": {
+      "Type": "AWS::SSM::Document",
+      "Properties": {
+        "Content": {
+          "outputs": [
+            "runPatchBaseline.Output"
+          ],
+          "description": "Automation document to execute the Command document AWS-RunPatchBaseline",
+          "schemaVersion": "0.3",
+          "assumeRole": "{{AutomationAssumeRole}}",
+          "parameters": {
+            "AutomationAssumeRole": {
+              "type": "String",
+              "description": "(Optional) The ARN of the role that allows Automation to perform the actions on your behalf.",
+              "default": ""
+            },
+            "Operation": {
+              "allowedValues": [
+                "Scan",
+                "Install"
+              ],
+              "description": "(Required) The update or configuration to perform on the instance. The system checks if patches specified in the patch baseline are installed on the instance. The install operation installs patches missing from the baseline.",
+              "type": "String"
+            },
+            "SnapshotId": {
+              "default": "",
+              "description": "(Optional) The snapshot ID to use to retrieve a patch baseline snapshot.",
+              "type": "String",
+              "allowedPattern": "(^$)|^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+            },
+            "InstanceId": {
+              "description": "(Required) EC2 InstanceId to which we apply the patch-baseline",
+              "type": "String"
+            },
+            "InstallOverrideList": {
+              "default": "",
+              "description": "(Optional) An https URL or an Amazon S3 path-style URL to the list of patches to be installed. This patch installation list overrides the patches specified by the default patch baseline.",
+              "type": "String",
+              "allowedPattern": "(^$)|^https://.+$|^s3://([^/]+)/(.*?([^/]+))$"
+            }
+          },
+          "mainSteps": [
+            {
+              "maxAttempts": 3,
+              "inputs": {
+                "Parameters": {
+                  "SnapshotId": "{{SnapshotId}}",
+                  "InstallOverrideList": "{{InstallOverrideList}}",
+                  "Operation": "{{Operation}}"
+                },
+                "InstanceIds": [
+                  "{{InstanceId}}"
+                ],
+                "DocumentName": "AWS-RunPatchBaseline"
+              },
+              "name": "runPatchBaseline",
+              "action": "aws:runCommand",
+              "timeoutSeconds": 120,
+              "onFailure": "Abort"
+            }
+          ]
+        },
+        "DocumentType": "Automation",
+        "Name": "Automation-RunScan"
+      }
+    },
+    "AutomationDocumentAlertRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "AutomationDocumentAlertRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole"
+
+        ],
+        "Policies": [
+          {
+            "PolicyName": "AssumeRoleSSM-Lambda",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "iam:PassRole"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/AWS-SystemsManager-AutomationAdministrationRole"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "LambdaFunctionForScanning": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "AutomationDocumentAlert",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "AutomationDocumentAlertRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs12.x",
+        "Timeout": 300,
+        "Code": {
+          "ZipFile": "const AWS = require('aws-sdk');\nconst ssm = new AWS.SSM();\nexports.handler = async(event) => {\n  let ouSSMResponse = await ssm.getParameter({ Name: 'oulist' }).promise();\n  let ouList = ouSSMResponse.Parameter.Value;\n  ouList = ouList.split(\",\");\n  console.log(\"ouList\", ouList);\n  console.log(\"is ouList already an array ?\", Array.isArray(ouList));\n  \n  var ssmParams = {\n    DocumentName: 'Automation-RunScan',\n    Parameters: {\n      'Operation': ['Scan'],\n      'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole']\n    },\n    TargetLocations: [{\n        Accounts: ouList, // ['ou-e4k3-g2sy60vr', 'ou-e4k3-i998an5p','ou-e4k3-jpejdkd4']\n        ExecutionRoleName: 'AWS-SystemsManager-AutomationExecutionRole',\n        Regions: ['eu-west-1'],\n        TargetLocationMaxErrors: '100%'\n      },\n      \n    ],\n    TargetParameterName: 'InstanceId',\n    Targets: [{\n        Key: 'InstanceIds',\n        Values: [\n          '*',\n        ]\n      },\n      \n    ],\n  };\n\n\n  try {\n    let data = await ssm.startAutomationExecution(ssmParams).promise();\n    console.log(data);\n\n  }\n  catch (e) {\n    console.error(e);\n  }\n};\n"
+        }
+      }
+    },
+    "oulistParameter": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": "oulist",
+        "Type": "StringList",
+        "Value": "placeholder1,placeholder2",
+        "Description": "A list of organization units that are involved in test manager"
+      }
+    },
+    "iamAccessRoleParameter": {
+      "Type": "AWS::SSM::Parameter",
+      "Properties": {
+        "Name": "iamAccessRole",
+        "Type": "StringList",
+        "Value": "lambda-cross-account-access-role",
+        "Description": "A list of role names that are in the child accounts, that lambda in the parent account will use to retrieve information from the child account"
+      }
+    },
+    "EC2StatesDatabase": {
+      "Type": "AWS::DynamoDB::Table",
+      "Properties": {
+        "AttributeDefinitions": [
+          {
+            "AttributeName": "instanceId",
+            "AttributeType": "S"
+          }
+        ],
+        "KeySchema": [
+          {
+            "AttributeName": "instanceId",
+            "KeyType": "HASH"
+          }
+        ],
+        "BillingMode": "PAY_PER_REQUEST",
+        "TableName": "TestManagerEC2States"
+      }
+    },
+    "AutomationDocumentForManualApprovalTestStage": {
+      "Type": "AWS::SSM::Document",
+      "Properties": {
+        "Content": {
+          "description": "Automation document for manual approval",
+          "schemaVersion": "0.3",
+          "assumeRole": "{{AutomationAssumeRole}}",
+          "outputs": [
+            "WaitForManualApproval.ApprovalStatus"
+          ],
+          "parameters": {
+            "AutomationAssumeRole": {
+              "type": "String",
+              "description": "(Required) The ARN of the role that allows Automation to perform the actions on your behalf."
+            },
+            "Approvers": {
+              "type": "StringList",
+              "description": "(Required) The ARN of the role that allows other accounts to approve the workload."
+            },
+            "Message": {
+              "type": "String",
+              "description": "(Required) The message that will be shown to the approvers."
+            },
+            "NotificationArn": {
+              "type": "String",
+              "description": "(Required) The ARN of an Amazon SNS topic for Automation approvals."
+            },
+            "InstanceIds": {
+              "type": "String",
+              "description": "(Required) Instance Ids of this workload"
+            },
+            "AccountId": {
+              "type": "String",
+              "description": "(Required) Account where the workload resides"
+            }
+          },
+          "mainSteps": [
+            {
+              "name": "WaitForManualApproval",
+              "action": "aws:approve",
+              "onFailure": "step:InvokeLambdaFunction",
+              "inputs": {
+                "Approvers": "{{Approvers}}",
+                "Message": "{{Message}}",
+                "NotificationArn": "{{NotificationArn}}",
+                "MinRequiredApprovals": 1
+              },
+              "description": "Waits for an owner to manually approve",
+              "nextStep": "InvokeLambdaFunction"
+            },
+            {
+              "name": "InvokeLambdaFunction",
+              "action": "aws:invokeLambdaFunction",
+              "inputs": {
+                "FunctionName": "invoke_main",
+                "Payload": "{\"accountId\" : \"{{AccountId}}\",\"instanceIds\": \"{{InstanceIds}}\", \"executionId\": \"{{automation:EXECUTION_ID}}\"}"
+              }
+            }
+          ]
+        },
+        "DocumentType": "Automation",
+        "Name": "Automation-CreatingAMI"
+      }
+    },
+    "AutomationDocumentForTestResourceCreation": {
+      "Type": "AWS::SSM::Document",
+      "Properties": {
+        "Content": {
+          "description": "This automation creates an AMI image, then launches an EC2 instance based on that AMI image.",
+          "schemaVersion": "0.3",
+          "assumeRole": "{{AutomationAssumeRole}}",
+          "parameters": {
+            "InstanceId": {
+              "type": "String",
+              "description": "(Required) The ID of the Amazon EC2 instance."
+            },
+            "NoReboot": {
+              "type": "Boolean",
+              "default": false,
+              "description": "(Optional) Do not reboot the instance before creating the image."
+            },
+            "AutomationAssumeRole": {
+              "type": "String",
+              "description": "(Optional) The ARN of the role that allows Automation to perform the actions on your behalf. ",
+              "default": ""
+            },
+            "Workload": {
+              "type": "String",
+              "description": "(Required) The workload this instance belongs to. "
+            },
+            "RoleARN": {
+              "type": "String",
+              "description": "(Required) role ARN of the account"
+            }
+          },
+          "mainSteps": [
+            {
+              "name": "createImage",
+              "action": "aws:createImage",
+              "inputs": {
+                "InstanceId": "{{InstanceId}}",
+                "ImageName": "TEST_{{ Workload }}_ {{ InstanceId }}",
+                "NoReboot": false
+              }
+            },
+            {
+              "name": "invokeLambda",
+              "action": "aws:invokeLambdaFunction",
+              "inputs": {
+                "FunctionName": {
+                  "Fn::Sub": "arn:aws:lambda:eu-west-1:${AWS::AccountId}:function:getInstanceTypeAndTags"
+
+                },
+                "Payload": "{\"instanceId\": \"{{InstanceId}}\", \"ARN\": \"{{RoleARN}}\"}"
+              }
+            },
+            {
+              "name": "invokeScript",
+              "action": "aws:executeScript",
+              "outputs": [
+                {
+                  "Name": "instanceType",
+                  "Selector": "$.Payload.instanceType",
+                  "Type": "String"
+                },
+                {
+                  "Name": "instanceTags",
+                  "Selector": "$.Payload.instanceTags",
+                  "Type": "MapList"
+                }
+              ],
+              "inputs": {
+                "Runtime": "python3.6",
+                "Handler": "script_handler",
+                "InputPayload": {
+                  "payload": "{{ invokeLambda.Payload }}",
+                  "instanceId": "{{InstanceId}}"
+                },
+                "Script": "import json\ndef script_handler(event, context):\n  json_object = json.loads(event['payload'])\n  return {'instanceType': json_object['InstanceType'], 'instanceTags': json_object['Tags']}"
+              }
+            },
+            {
+              "name": "launchInstance",
+              "action": "aws:runInstances",
+              "inputs": {
+                "ImageId": "{{ createImage.ImageId }}",
+                "IamInstanceProfileName": "SSMInstanceProfile",
+                "KeyName": {"Ref": "KeyPairName"},
+                "InstanceType": "{{ invokeScript.instanceType }}",
+                "TagSpecifications": [
+                  {
+                    "ResourceType": "instance",
+                    "Tags": [
+                      {
+                        "Key": "Name",
+                        "Value": "TEST_{{ Workload }}_ {{ InstanceId }}"
+                      }
+                    ]
+                  }
+                ]
+              }
+            },
+            {
+              "name": "createTags",
+              "action": "aws:createTags",
+              "maxAttempts": 3,
+              "onFailure": "Abort",
+              "inputs": {
+                "ResourceType": "EC2",
+                "ResourceIds": "{{ launchInstance.InstanceIds }}",
+                "Tags": "{{ invokeScript.instanceTags }}"
+              }
+            },
+            {
+              "maxAttempts": 3,
+              "inputs": {
+                "Parameters": {
+                  "Operation": "Install"
+                },
+                "InstanceIds": [
+                  "{{ launchInstance.InstanceIds }}"
+                ],
+                "DocumentName": "AWS-RunPatchBaseline"
+              },
+              "name": "runPatchBaseline",
+              "action": "aws:runCommand",
+              "timeoutSeconds": 800,
+              "onFailure": "Continue"
+            }
+          ]
+        },
+        "DocumentType": "Automation",
+        "Name": "Automation-CreateAMI-LaunchEC2"
+      }
+    },
+    "AutomationDocumentForManualApprovalPatchingStage": {
+      "Type": "AWS::SSM::Document",
+      "Properties": {
+        "Content": {
+          "description": "Automation that patches live instances of a given workload upon user approval",
+          "schemaVersion": "0.3",
+          "assumeRole": "{{AutomationAssumeRole}}",
+          "parameters": {
+            "AutomationAssumeRole": {
+              "type": "String",
+              "description": "(Required) The ARN of the role that allows Automation to perform the actions on your behalf."
+            },
+            "Approvers": {
+              "type": "StringList",
+              "description": "(Required) The ARN of the role that allows other accounts to approve the workload."
+            },
+            "Message": {
+              "type": "String",
+              "description": "(Required) The message that will be shown to the approvers."
+            },
+            "NotificationArn": {
+              "type": "String",
+              "description": "(Required) The ARN of an Amazon SNS topic for Automation approvals."
+            },
+            "InstanceIds": {
+              "type": "String",
+              "description": "(Required) Instance ids of the workload"
+            },
+            "RoleARN": {
+              "type": "String",
+              "description": "(Required) Role ARN of the account"
+            },
+            "Workload": {
+              "type": "String",
+              "description": "(Required) Name of the workload"
+            }
+          },
+          "mainSteps": [
+            {
+              "name": "WaitForManualApproval",
+              "action": "aws:approve",
+              "onFailure": "step:InvokeLambdaFunction",
+              "inputs": {
+                "Approvers": "{{Approvers}}",
+                "Message": "{{Message}}",
+                "NotificationArn": "{{NotificationArn}}",
+                "MinRequiredApprovals": 1
+              },
+              "description": "Waits for an owner to manually approve",
+              "nextStep": "InvokeLambdaFunction"
+            },
+            {
+              "name": "InvokeLambdaFunction",
+              "action": "aws:invokeLambdaFunction",
+              "inputs": {
+                "FunctionName": "patchLiveInstances",
+                "Payload": "{\"ARN\": \"{{RoleARN}}\", \"instanceIds\": \"{{InstanceIds}}\", \"workload\": \"{{Workload}}\"}"
+              }
+            }
+          ]
+        },
+        "DocumentType": "Automation",
+        "Name": "Automation-TestApproval-PatchLiveInstances"
+      }
+    },
+    "ScheduleComplianceScanEventBridgeRule": {
+      "Type": "AWS::Events::Rule",
+      "Properties": {
+        "Description": "Scheduled rule to invoke lambda function for scanning instances for compliance",
+        "Name": "ScheduleComplianceScan",
+        "ScheduleExpression": "rate(90 days)",
+        "State": "ENABLED",
+        "Targets": [{
+          "Arn": { "Fn::GetAtt": ["LambdaFunctionForScanning", "Arn"] },
+          "Id": "TargetFunctionV1"
+        }]
+      }
+    },
+    "PermissionForEventsToInvokeScanningLambda": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": { "Fn::GetAtt": ["LambdaFunctionForScanning", "Arn"] },
+        "Action": "lambda:InvokeFunction",
+        "Principal": "events.amazonaws.com",
+        "SourceArn": { "Fn::GetAtt": ["ScheduleComplianceScanEventBridgeRule", "Arn"] }
+      }
+    },
+    "LambdaFunctionGetInstanceTypeAndTags": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "getInstanceTypeAndTags",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "GetInstanceTypeAndTagsRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs12.x",
+        "Timeout": 300,
+        "Code": {
+          "ZipFile": "const AWS = require('aws-sdk');\nconst ssm = new AWS.SSM();\nexports.handler = async(event) => {\n  let ouSSMResponse = await ssm.getParameter({ Name: 'oulist' }).promise();\n  let ouList = ouSSMResponse.Parameter.Value;\n  ouList = ouList.split(\",\");\n  console.log(\"ouList\", ouList);\n  console.log(\"is ouList already an array ?\", Array.isArray(ouList));\n  \n  var ssmParams = {\n    DocumentName: 'Automation-RunScan',\n    Parameters: {\n      'Operation': ['Scan'],\n      'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole']\n    },\n    TargetLocations: [{\n        Accounts: ouList, // ['ou-e4k3-g2sy60vr', 'ou-e4k3-i998an5p','ou-e4k3-jpejdkd4']\n        ExecutionRoleName: 'AWS-SystemsManager-AutomationExecutionRole',\n        Regions: ['eu-west-1'],\n        TargetLocationMaxErrors: '100%'\n      },\n      \n    ],\n    TargetParameterName: 'InstanceId',\n    Targets: [{\n        Key: 'InstanceIds',\n        Values: [\n          '*',\n        ]\n      },\n      \n    ],\n  };\n\n\n  try {\n    let data = await ssm.startAutomationExecution(ssmParams).promise();\n    console.log(data);\n\n  }\n  catch (e) {\n    console.error(e);\n  }\n};\n"
+        }
+      }
+    },
+    "GetInstanceTypeAndTagsRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "getInstanceTypeAndTagsRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "AssumeRole-Lambda",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sts:AssumeRole"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::${ChildAccountId}:role/lambda-cross-account-access-role"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "LambdaFunctionPermissions": {
+      "Type": "AWS::Lambda::Permission",
+      "Properties": {
+        "FunctionName": {
+          "Fn::GetAtt": [
+            "LambdaFunctionGetInstanceTypeAndTags",
+            "Arn"
+          ]
+        },
+        "Action": "lambda:InvokeFunction",
+        "Principal": {
+          "Ref": "ChildAccountId"
+        }
+      }
+    },
+    "LambdaFunctionPatchLiveInstances": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "patchLiveInstances",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "PatchLiveInstancesRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs12.x",
+        "Timeout": 300,
+        "Code": {
+          "ZipFile": "const aws = require('aws-sdk');\nconst ssm = new aws.SSM();\nexports.handler = async(event) => {\n    //TODO call patching document\n    let roleARN = event.ARN; \n    console.log(\"roleARN\", roleARN);\n    let instanceIdsString = event.instanceIds; \n    let instanceIdsArray = instanceIdsString.split(',');\n    console.log(\"instanceIdsArray\", instanceIdsArray);\n\n    try {\n    let ssmAutomation = await ssm.startAutomationExecution(createSSMAutomationDocumentObject(instanceIdsArray, roleARN)).promise();\n    console.log(\"ssmAutomation\", ssmAutomation);\n    }\n    catch (e) {\n    console.error(e);\n  }\n   let sts = new aws.STS({ region: process.env.REGION });\n    let stsParams = {\n        RoleArn: roleARN,\n        RoleSessionName: \"awsaccount_session\"\n    };\n     const stsResults = await sts.assumeRole(stsParams).promise();\n//    console.log(stsResults);\n  let ec2 = new aws.EC2({\n        region: process.env.REGION,\n        accessKeyId: stsResults.Credentials.AccessKeyId,\n        secretAccessKey: stsResults.Credentials.SecretAccessKey,\n        sessionToken: stsResults.Credentials.SessionToken\n    });\n\n    for(let instanceId of instanceIdsArray){\n         let ec2Params = {\n            Filters: [{\n                Name: \"tag:Name\",\n                Values: [\n                   `TEST_${event.workload}_ ${instanceId}`\n                ]\n            }]\n        };\n        let amiParams = {\n            Filters: [{\n                Name: \"name\",\n                Values: [\n                   `TEST_${event.workload}_ ${instanceId}`\n                ]\n            }]\n        };\n        \n    try {\n        let ec2TagsResponse = await ec2.describeInstances(ec2Params).promise();\n        let testInstanceId = ec2TagsResponse.Reservations[0].Instances[0].InstanceId;\n        console.log(\"testInstanceId\", testInstanceId);\n        let ec2TerminateResponse = await ec2.terminateInstances({InstanceIds: [testInstanceId]}).promise();\n        console.log(\"ec2TerminateResponse\", ec2TerminateResponse);\n    }\n    catch (e) {\n    console.error(e);\n  }\n    }\n   \n    \n};\n\nfunction createSSMAutomationDocumentObject(instanceIds, roleARN){\n    return {\n        DocumentName: 'Automation-RunScan',\n        Parameters: {\n            'Operation': ['Install'],\n            'AutomationAssumeRole': ['arn:aws:iam::<ParentAccountId>:role/AWS-SystemsManager-AutomationAdministrationRole'],\n        },\n        TargetLocations: [{\n            Accounts: [getAcountId(roleARN)],\n            ExecutionRoleName: 'AWS-SystemsManager-AutomationExecutionRole',\n            Regions: ['eu-west-1'],\n            TargetLocationMaxErrors: '100%'\n        },\n\n        ],\n        TargetParameterName: 'InstanceId',\n        Targets: [{\n            Key: 'ParameterValues',\n            Values: instanceIds\n\n        },\n\n        ],\n    };\n}\nfunction getAcountId(roleARN){\n    return roleARN.substring(roleARN.lastIndexOf(\"::\") + 2, roleARN.lastIndexOf(\":role/\"));\n}"
+        }
+      }
+    },
+    "PatchLiveInstancesRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "patchLiveInstancesRole",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "AssumeRole-Lambda",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sts:AssumeRole"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::${ChildAccountId}:role/lambda-cross-account-access-role"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "LambdaFunctionInvokeSecondary": {
+      "Type": "AWS::Lambda::Function",
+      "Properties": {
+        "FunctionName": "invoke_secondary",
+        "Handler": "index.handler",
+        "Role": {
+          "Fn::GetAtt": [
+            "LambdaBasicExecCrossAccountRole",
+            "Arn"
+          ]
+        },
+        "Runtime": "nodejs12.x",
+        "Timeout": 300,
+        "Code": {
+          "ZipFile": "const aws = require('aws-sdk');\nconst util = require('util');\nexports.handler = async(event) => {\n    let roleARN = event.ARN;\n    console.log(\"roleARN\", roleARN);\n\n    //initiating a session using ARN of the IAM role\n\n    let sts = new aws.STS({ region: process.env.REGION });\n    let stsParams = {\n        RoleArn: roleARN,\n        RoleSessionName: \"awsaccount_session\"\n    };\n    const stsResults = await sts.assumeRole(stsParams).promise();\n    console.log(stsResults);\n    let ec2 = new aws.EC2({\n        region: process.env.REGION,\n        accessKeyId: stsResults.Credentials.AccessKeyId,\n        secretAccessKey: stsResults.Credentials.SecretAccessKey,\n        sessionToken: stsResults.Credentials.SessionToken\n    });\n\n    let ssm = new aws.SSM({\n        region: process.env.REGION,\n        accessKeyId: stsResults.Credentials.AccessKeyId,\n        secretAccessKey: stsResults.Credentials.SecretAccessKey,\n        sessionToken: stsResults.Credentials.SessionToken\n    });\n\n    let ssmParams = {\n        Filters: [{\n            Key: \"ComplianceType\",\n            Type: \"EQUAL\",\n            Values: [\n                \"Patch\"\n            ]\n        },\n            {\n                Key: \"Status\",\n                Type: \"EQUAL\",\n                Values: [\n                    \"NON_COMPLIANT\"\n                ]\n            },\n        ],\n    };\n\n\n    let res = await ssm.listResourceComplianceSummaries(ssmParams).promise();\n\n    for (let i = 0; i < res.ResourceComplianceSummaryItems.length; i++) {\n        let ec2Params = {\n            Filters: [{\n                Name: \"resource-id\",\n                Values: [\n                    res.ResourceComplianceSummaryItems[i].ResourceId\n                ]\n            }]\n        };\n\n        let ssmInfoParams = {\n            Filters: [{\n                Key: \"InstanceIds\",\n                Values: [\n                    res.ResourceComplianceSummaryItems[i].ResourceId\n                ]\n            }]\n        };\n\n        let ssmPatchParams = {\n            InstanceId: res.ResourceComplianceSummaryItems[i].ResourceId,\n            Filters: [\n                {\n                    Key: 'State',\n                    Values: [\n                        'Missing'\n\n                    ]\n                },\n\n            ],\n        };\n\n        let ec2TagsResponse = await ec2.describeTags(ec2Params).promise();\n        let instanceInfo = await ssm.describeInstanceInformation(ssmInfoParams).promise();\n        let instancePatchInfo = await ssm.describeInstancePatches(ssmPatchParams).promise();\n\n        res.ResourceComplianceSummaryItems[i].Tags = ec2TagsResponse.Tags;\n        res.ResourceComplianceSummaryItems[i].awsAccountId = getAcountId(roleARN);\n        res.ResourceComplianceSummaryItems[i].operatingSystem = instanceInfo.InstanceInformationList[0].PlatformType;\n        res.ResourceComplianceSummaryItems[i].Patches = instancePatchInfo.Patches;\n        let ownerEmailsArray = ec2TagsResponse.Tags.filter(tag => tag.Key === \"ssmpatching.owner\").map(tag => tag.Value.split(\",\")).flat().map(ownerEmail => ownerEmail.trim());\n        ownerEmailsArray = [...new Set(ownerEmailsArray)];\n        res.ResourceComplianceSummaryItems[i].ownerEmails = ownerEmailsArray;\n    }\n\n    console.log(\"res\", res);\n\n    const response = {\n        statusCode: 200,\n        body: res,\n    };\n\n    return response;\n\n};\nfunction getAcountId(roleARN){\n    return roleARN.substring(roleARN.lastIndexOf(\"::\") + 2, roleARN.lastIndexOf(\":role/\"));\n}\n"
+        }
+      }
+    },
+    "LambdaBasicExecCrossAccountRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "lambda_basicexec_crossaccount",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "AssumeRole-Lambda",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "sts:AssumeRole"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::${ChildAccountId}:role/lambda-cross-account-access-role"
+                  }
+                }
+              ]
+            }
+          }
+        ]
+      }
+    },
+    "LambdaFunctionsInvokerRole": {
+      "Type": "AWS::IAM::Role",
+      "Properties": {
+        "RoleName": "lambda_functions_invoker",
+        "AssumeRolePolicyDocument": {
+          "Version": "2012-10-17",
+          "Statement": [
+            {
+              "Effect": "Allow",
+              "Principal": {
+                "Service": "lambda.amazonaws.com"
+              },
+              "Action": "sts:AssumeRole"
+            }
+          ]
+        },
+        "Path": "/",
+        "ManagedPolicyArns": [
+          "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole",
+          "arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole",
+          "arn:aws:iam::aws:policy/AWSOrganizationsReadOnlyAccess",
+          "arn:aws:iam::aws:policy/AmazonDynamoDBFullAccess",
+          "arn:aws:iam::aws:policy/AmazonSESFullAccess",
+          "arn:aws:iam::aws:policy/IAMFullAccess"
+        ],
+        "Policies": [
+          {
+            "PolicyName": "InlinePolicy-Lambda",
+            "PolicyDocument": {
+              "Version": "2012-10-17",
+              "Statement": [
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "iam:PassRole"
+                  ],
+                  "Resource": {
+                    "Fn::Sub": "arn:${AWS::Partition}:iam::${AWS::AccountId}:role/AWS-SystemsManager-AutomationAdministrationRole"
+                  }
+                },
+                {
+                  "Effect": "Allow",
+                  "Action": [
+                    "lambda:InvokeFunction",
+                    "lambda:InvokeAsync"
+                  ],
+                  "Resource": "*"
+                }
+              ]
+
+            }
+          }
+        ]
+      }
+    }
+  }
+}
